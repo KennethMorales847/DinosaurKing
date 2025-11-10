@@ -1,10 +1,12 @@
 from settings import *
+from game_data import *
 from pytmx.util_pygame import load_pygame
 from os.path import join
 
-from sprites import Sprite, AnimatedSprite, MonsterPatchSprite, BorderSprite
+from sprites import Sprite, AnimatedSprite, MonsterPatchSprite, BorderSprite, CollaidableSprite
 from entities import Player, Character
 from groups import AllSprites
+from dialog import DialogTree
 from support import *
 
 class Game:
@@ -17,6 +19,7 @@ class Game:
         #groups
         self.all_sprites = AllSprites()
         self.collision_sprites = pygame.sprite.Group()
+        self.character_sprites = pygame.sprite.Group()
         
         self.import_assets()
         self.setup(self.tmx_maps['world'], 'house')
@@ -32,7 +35,10 @@ class Game:
             'characters': all_character_import('graphics','characters')
 
         }
-        print(self.overworld_frames['characters'])
+
+        self.fonts = {
+            'dialog': pygame.font.Font(join('graphics','fonts','PixeloidSans.ttf'), 30)
+        }
     
     
     def setup(self, tmx_map, player_start_pos):
@@ -58,7 +64,7 @@ class Game:
             if obj.name == 'top':
                 Sprite((obj.x, obj.y), obj.image, self.all_sprites, WORLD_LAYERS['top'])
             else:
-                Sprite((obj.x, obj.y), obj.image, (self.all_sprites, self.collision_sprites))
+                CollaidableSprite((obj.x, obj.y), obj.image, (self.all_sprites, self.collision_sprites))
         
         #collision objects
         for obj in tmx_map.get_layer_by_name('Collisions'):
@@ -77,20 +83,31 @@ class Game:
                         pos = (obj.x, obj.y), 
                         frames = self.overworld_frames['characters']['player'], 
                         groups = self.all_sprites,
-                        facing_direction=obj.properties['direction']
+                        facing_direction=obj.properties['direction'],
                         collision_sprites = self.collision_sprites
                         )
             else:
                 Character(
                     pos = (obj.x, obj.y), 
                     frames = self.overworld_frames['characters'][obj.properties['graphic']], 
-                    groups = (self.all_sprites, self.collision_sprites),
-                    facing_direction=obj.properties['direction']
+                    groups = (self.all_sprites, self.collision_sprites, self.character_sprites),
+                    facing_direction=obj.properties['direction'],
+                    character_data = TRAINER_DATA[obj.properties['character_id']]
                     )
                 
         
-            
-    
+    def input(self):
+        keys = pygame.key.get_just_pressed()
+        if keys[pygame.K_SPACE]:
+            for character in self.character_sprites:
+                if check_connection(100, self.player, character):
+                  self.player.block()
+                  character.change_facing_direction(self.player.rect.center)
+                  self.create_dialog(character) 
+
+    def create_dialog(self, character):
+        DialogTree(character, self.player, self.all_sprites, self.fonts['dialog'])
+
     def run(self):
         while True:
             dt = self.clock.tick() / 1000
@@ -101,6 +118,7 @@ class Game:
                     exit()
             
             #game logic
+            self.input()
             self.all_sprites.update(dt)
             self.display_surface.fill('black')
             self.all_sprites.draw(self.player.rect.center)
