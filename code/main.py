@@ -25,6 +25,8 @@ class Game:
         self.setup(self.tmx_maps['world'], 'house')
         #self.setup(self.tmx_maps['hospital'], 'world')
         
+        self.dialog_tree = None
+        
     def import_assets(self):
         self.tmx_maps = {'world':load_pygame(join('data','maps','world.tmx')),
                          'hospital':load_pygame(join('data','maps','hospital.tmx'))}
@@ -92,22 +94,33 @@ class Game:
                     frames = self.overworld_frames['characters'][obj.properties['graphic']], 
                     groups = (self.all_sprites, self.collision_sprites, self.character_sprites),
                     facing_direction=obj.properties['direction'],
-                    character_data = TRAINER_DATA[obj.properties['character_id']]
+                    character_data = TRAINER_DATA[obj.properties['character_id']],
+                    player = self.player, 
+                    create_dialog = self.create_dialog,
+                    collision_sprites= self.collision_sprites,
+                    radius = obj.properties['radius']
                     )
                 
         
     def input(self):
-        keys = pygame.key.get_just_pressed()
-        if keys[pygame.K_SPACE]:
-            for character in self.character_sprites:
-                if check_connection(100, self.player, character):
-                  self.player.block()
-                  character.change_facing_direction(self.player.rect.center)
-                  self.create_dialog(character) 
+        if not self.dialog_tree:
+            keys = pygame.key.get_just_pressed()
+            if keys[pygame.K_SPACE]:
+                for character in self.character_sprites:
+                    if check_connection(100, self.player, character):
+                        self.player.block()
+                        character.change_facing_direction(self.player.rect.center)
+                        self.create_dialog(character) 
+                        character.can_rotate = False
 
     def create_dialog(self, character):
-        DialogTree(character, self.player, self.all_sprites, self.fonts['dialog'])
-
+        if not self.dialog_tree:
+            self.dialog_tree= DialogTree(character, self.player, self.all_sprites, self.fonts['dialog'], self.end_dialog)
+    
+    def end_dialog(self, character):
+        self.dialog_tree = None
+        self.player.unblock()
+    
     def run(self):
         while True:
             dt = self.clock.tick() / 1000
@@ -121,8 +134,11 @@ class Game:
             self.input()
             self.all_sprites.update(dt)
             self.display_surface.fill('black')
-            self.all_sprites.draw(self.player.rect.center)
+            self.all_sprites.draw(self.player)
             pygame.display.update()
+            
+            #overlays
+            if self.dialog_tree: self.dialog_tree.update()
             
 if __name__ == "__main__":
     game = Game()
