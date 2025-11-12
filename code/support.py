@@ -3,7 +3,7 @@ from os.path import join
 from os import walk
 from pytmx.util_pygame import load_pygame
 
-# imports 
+# import functions
 def import_image(*path, alpha = True, format = 'png'):
 	full_path = join(*path) + f'.{format}'
 	surf = pygame.image.load(full_path).convert_alpha() if alpha else pygame.image.load(full_path).convert()
@@ -36,54 +36,162 @@ def import_sub_folders(*path):
 	return frames
 
 def import_tilemap(cols, rows, *path):
-	frames = {}
-	surf = import_image(*path)
-	# use integer cell sizes to avoid float rects and preserve per-pixel alpha
-	cell_width, cell_height = surf.get_width() // cols, surf.get_height() // rows
-	for col in range(cols):
-		for row in range(rows):
-			cutout_rect = pygame.Rect(col * cell_width, row * cell_height, cell_width, cell_height)
-			# extract the tile as an independent surface with alpha preserved
-			cutout_surf = surf.subsurface(cutout_rect).copy().convert_alpha()
-			frames[(col, row)] = cutout_surf
-	return frames
+    frames = {}
+    surf = import_image(*path)
+    cell_width, cell_height = surf.get_width() / cols, surf.get_height() / rows
 
-def character_importer(cols,rows, *path):
-    frame_dict = import_tilemap(cols, rows, *path)
-    new_dict = {}
-    for row, direction in enumerate(('down', 'left', 'right', 'up')):
-        new_dict[direction] = [frame_dict[(col, row)] for col in range(cols)]
-        new_dict[f'{direction}_idle'] = [frame_dict[(0,row)]]
-    return new_dict
+    # Use per-pixel alpha surfaces for cutouts to avoid color-key artifacts (green borders).
+    for col in range(cols):
+        for row in range(rows):
+            cutout_rect = pygame.Rect(int(col * cell_width), int(row * cell_height), int(cell_width), int(cell_height))
+
+            # Create a SRCALPHA surface and copy the region
+            cutout_surf = pygame.Surface((cutout_rect.width, cutout_rect.height), pygame.SRCALPHA)
+            # Ensure we blit the exact region from the source with alpha preserved
+            cutout_surf.blit(surf, (0, 0), cutout_rect)
+
+            # Optionally convert for faster blits while preserving alpha
+            frames[(col, row)] = cutout_surf.convert_alpha()
+
+    return frames
+
+def character_importer(cols, rows, *path):
+	frame_dict = import_tilemap(cols, rows, *path)
+	new_dict = {}
+	for row, direction in enumerate(('down', 'left', 'right', 'up')):
+		new_dict[direction] = [frame_dict[(col, row)] for col in range(cols)]
+		new_dict[f'{direction}_idle'] = [frame_dict[(0, row)]]
+	return new_dict
 
 def all_character_import(*path):
-    new_dict = {}
-    for _,__, image_names in walk(join(*path)):
+	new_dict = {}
+	for _, __, image_names in walk(join(*path)):
+		for image in image_names:
+			image_name = image.split('.')[0]
+			new_dict[image_name] = character_importer(4,4,*path, image_name)
+	return new_dict
+
+def coast_importer(cols, rows, *path):
+	frame_dict = import_tilemap(cols, rows, *path)
+	new_dict = {}
+	terrains = ['grass', 'grass_i', 'sand_i', 'sand', 'rock', 'rock_i', 'ice', 'ice_i']
+	sides = {
+		'topleft': (0,0), 'top': (1,0), 'topright': (2,0), 
+		'left': (0,1), 'right': (2,1), 'bottomleft': (0,2), 
+		'bottom': (1,2), 'bottomright': (2,2)}
+	for index, terrain in enumerate(terrains):
+		new_dict[terrain] = {}
+		for key, pos in sides.items():
+			new_dict[terrain][key] = [frame_dict[(pos[0] + index * 3, pos[1] + row)] for row in range(0,rows, 3)]
+	return new_dict
+
+def tmx_importer(*path):
+	tmx_dict = {}
+	for folder_path, sub_folders, file_names in walk(join(*path)):
+		for file in file_names:
+			tmx_dict[file.split('.')[0]] = load_pygame(join(folder_path, file))
+	return tmx_dict
+
+def monster_importer(cols, rows, *path):
+    """
+    Load one image per monster (ignore cols/rows). Each loaded image is scaled
+    into MONSTER_SPRITE_SIZE preserving aspect ratio and placed into the
+    expected structure:
+        monster_dict[name] = {'idle': [surf], 'attack': [surf]}
+    """
+    monster_dict = {}
+    for folder_path, _, image_names in walk(join(*path)):
         for image in image_names:
             image_name = image.split('.')[0]
-            new_dict[image_name] = character_importer(4,4,*path, image_name)
-        return new_dict
-def coast_importer(cols, rows, *path):
-    frame_dict = import_tilemap(cols, rows, *path)
-    new_dict = {}
-    terrains = ['grass', 'grass_i', 'sand_i', 'sand', 'rock', 'rock_i', 'ice', 'ice_i']
-    sides = {'topleft':(0,0), 'top':(1,0), 'topright':(2,0),
-             'left':(0,1), 'right':(2,1),'bottomleft':(0,2), 
-             'bottom':(1,2), 'bottomright':(2,2)}
-    for index,terrain in enumerate(terrains):
-        new_dict[terrain] = {}
-        for key, pos in sides.items():
-            new_dict[terrain][key] = [frame_dict[(pos[0] + index * 3, pos[1] + row)] for row in range(0,rows,3)]
-    return new_dict
+            full_path = join(folder_path, image)
+            try:
+                surf = pygame.image.load(full_path).convert_alpha()
+            except Exception:
+                # if load fails, skip this image
+                continue
 
+            # target size from settings
+            target_w, target_h = MONSTER_SPRITE_SIZE
 
+            # preserve aspect ratio: scale surf to fit inside target box
+            src_w, src_h = surf.get_size()
+            if src_w == 0 or src_h == 0:
+                continue
+            scale = min(target_w / src_w, target_h / src_h)
+            new_w, new_h = max(1, int(src_w * scale)), max(1, int(src_h * scale))
+            scaled = pygame.transform.smoothscale(surf, (new_w, new_h))
 
+            # create a transparent target surface and center the scaled image on it
+            target_surf = pygame.Surface((target_w, target_h), pygame.SRCALPHA)
+            pos_x = (target_w - new_w) // 2
+            pos_y = (target_h - new_h) // 2
+            target_surf.blit(scaled, (pos_x, pos_y))
 
-def check_connection(radius, entity, target, tolerance = 30):
-	relation = vector (target.rect.center) - vector(entity.rect.center)
+            # provide both 'idle' and 'attack' as single-frame lists for compatibility
+            monster_dict[image_name] = {
+                'idle': [target_surf],
+                'attack': [target_surf]
+            }
+    return monster_dict
+
+def outline_creator(frame_dict, width):
+	outline_frame_dict = {}
+	for monster, monster_frames in frame_dict.items():
+		outline_frame_dict[monster] = {}
+		for state, frames in monster_frames.items():
+			outline_frame_dict[monster][state] = []
+			for frame in frames:
+                
+				new_surf = pygame.Surface(vector(frame.get_size()) + vector(width * 2), pygame.SRCALPHA)
+				new_surf.fill((0,0,0,0))
+
+                # create a colored mask-surface from the frame using HIGHLIGHT_COLOR
+                # to_surface supports setcolor/unsetcolor so we get a colored image with transparency
+				setcolor = (*HIGHLIGHT_COLOR, 255) if 'HIGHLIGHT_COLOR' in globals() else (255,255,255,255)
+				white_frame = pygame.mask.from_surface(frame).to_surface(setcolor=setcolor, unsetcolor=(0,0,0,0))
+
+                # stamp the colored mask around the center to create an outline
+				new_surf.blit(white_frame, (0,0))
+				new_surf.blit(white_frame, (width,0))
+				new_surf.blit(white_frame, (width * 2,0))
+				new_surf.blit(white_frame, (width * 2,width))
+				new_surf.blit(white_frame, (width * 2,width * 2))
+				new_surf.blit(white_frame, (width,width * 2))
+				new_surf.blit(white_frame, (0,width * 2))
+				new_surf.blit(white_frame, (0,width))
+				outline_frame_dict[monster][state].append(new_surf)
+	return outline_frame_dict
+
+def attack_importer(*path):
+	attack_dict = {}
+	for folder_path, _, image_names in walk(join(*path)):
+		for image in image_names:
+			image_name = image.split('.')[0]
+			attack_dict[image_name] = list(import_tilemap(4,1,folder_path, image_name).values())
+	return attack_dict
+
+def audio_importer(*path):
+	files = {}
+	for folder_path, _, file_names in walk(join(*path)):
+		for file_name in file_names:
+			full_path = join(folder_path, file_name)
+			files[file_name.split('.')[0]] = pygame.mixer.Sound(full_path)
+	return files
+
+# game functions
+def draw_bar(surface, rect, value, max_value, color, bg_color, radius = 1):
+	ratio = rect.width / max_value
+	bg_rect = rect.copy()
+	progress = max(0, min(rect.width,value * ratio))
+	progress_rect = pygame.FRect(rect.topleft, (progress,rect.height))
+	pygame.draw.rect(surface, bg_color, bg_rect, 0, radius)
+	pygame.draw.rect(surface, color, progress_rect, 0, radius)
+
+def check_connections(radius, entity, target, tolerance = 30):
+	relation = vector(target.rect.center) - vector(entity.rect.center)
 	if relation.length() < radius:
-		if entity.facing_direction == 'left' and relation.x < 0 and abs(relation.y) < tolerance or \
-		   entity.facing_direction == 'right' and relation.x > 0 and abs(relation.y) < tolerance or \
-		   entity.facing_direction == 'up' and relation.y < 0 and abs(relation.x) < tolerance or \
+		if entity.facing_direction == 'left' and relation.x < 0 and abs(relation.y) < tolerance or\
+		   entity.facing_direction == 'right' and relation.x > 0 and abs(relation.y) < tolerance or\
+		   entity.facing_direction == 'up' and relation.y < 0 and abs(relation.x) < tolerance or\
 		   entity.facing_direction == 'down' and relation.y > 0 and abs(relation.x) < tolerance:
 			return True

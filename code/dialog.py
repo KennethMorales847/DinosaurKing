@@ -13,7 +13,9 @@ class DialogTree:
         self.dialog_num = len(self.dialog)
         self.dialog_index = 0
 
+        # sprite de diálogo actual (burbuja)
         self.current_dialog = DialogSprite(self.dialog[self.dialog_index], self.character, self.all_sprites, self.font)
+        # temporizador pequeño para evitar avanzar instantáneamente al abrir
         self.dialog_timer = Timer(500, autostart=True)
         
     def input(self):
@@ -37,17 +39,18 @@ class DialogSprite(pygame.sprite.Sprite):
         super().__init__(groups)
         self.z = WORLD_LAYERS['top']
 
-        #text
+        # texto
         text_surf = font.render(message, False, COLORS['black'])
         padding = 5
         width = max(30, text_surf.get_width() + padding * 2)
         height = text_surf.get_height() + padding * 2
         
-        #background
+        # fondo de la burbuja (con borde redondeado)
         surf = pygame.Surface((width, height), pygame.SRCALPHA)
         surf.fill((0,0,0,0))
         pygame.draw.rect(surf, COLORS['pure white'], surf.get_frect(topleft = (0,0)), 0, 6)
         surf.blit(text_surf, text_surf.get_frect(center = (width/2, height/2)))
         
         self.image = surf
+        # posicionar la burbuja justo encima del personaje
         self.rect = self.image.get_frect(midbottom = character.rect.midtop + vector(0, -10))

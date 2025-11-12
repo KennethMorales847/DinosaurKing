@@ -1,117 +1,159 @@
-from settings import *
-from support import check_connection
+from settings import * 
+from support import check_connections
 from timer import Timer
 from random import choice
+from monster import Monster
 
 class Entity(pygame.sprite.Sprite):
     def __init__(self, pos, frames, groups, facing_direction):
         super().__init__(groups)
         self.z = WORLD_LAYERS['main']
-        #graphics
-        self.frame_index, self.frames = 0,frames
+
+        # gráficos (estado/frames)
+        self.frame_index, self.frames = 0, frames
         self.facing_direction = facing_direction
-        
-        #movement
+
+        # movimiento
         self.direction = vector()
-        self.speed = 450
+        self.speed = 350
         self.blocked = False
-        
-        #sprite setup
+
+        # inicialización del sprite (rect, hitbox)
         self.image = self.frames[self.get_state()][self.frame_index]
         self.rect = self.image.get_frect(center = pos)
-        self.hitbox = self.rect.inflate(-self.rect.width/2, -70) 
+        self.hitbox = self.rect.inflate(-self.rect.width / 2, -60)
+
+        # orden por Y para dibujado (depth)
         self.y_sort = self.rect.centery
-        
-    def animate(self,dt):
+
+    def animate(self, dt):
         self.frame_index += ANIMATION_SPEED * dt
         self.image = self.frames[self.get_state()][int(self.frame_index % len(self.frames[self.get_state()]))]
-        
+
     def get_state(self):
-        #logic
         moving = bool(self.direction)
         if moving:
             if self.direction.x != 0:
                 self.facing_direction = 'right' if self.direction.x > 0 else 'left'
             if self.direction.y != 0:
                 self.facing_direction = 'down' if self.direction.y > 0 else 'up'
-        return f'{self.facing_direction}{''if moving else '_idle'}'
-    
+        return f"{self.facing_direction}{'' if moving else '_idle'}"
+
     def change_facing_direction(self, target_pos):
-        relation = vector (target_pos) - vector(self.rect.center)
+        relation = vector(target_pos) - vector(self.rect.center)
         if abs(relation.y) < 30:
             self.facing_direction = 'right' if relation.x > 0 else 'left'
         else:
             self.facing_direction = 'down' if relation.y > 0 else 'up'
-    
+
     def block(self):
-        self.direction = vector(0,0)
+        # bloquear movimiento (usado cuando NPC detecta al jugador, etc.)
         self.blocked = True
-    
+        self.direction = vector(0,0)
+
     def unblock(self):
+        # desbloquear movimiento
         self.blocked = False
 
 class Character(Entity):
-    def __init__(self, pos, frames, groups, facing_direction, character_data, player, create_dialog, collision_sprites, radius):
+    def __init__(self, pos, frames, groups, facing_direction, character_data, player, create_dialog, collision_sprites, radius, nurse, notice_sound):
         super().__init__(pos, frames, groups, facing_direction)
         self.character_data = character_data
         self.player = player
         self.create_dialog = create_dialog
-        self.collision_sprites = collision_sprites
         self.collision_rects = [sprite.rect for sprite in collision_sprites if sprite is not self]
-        
-        #movement
+        self.nurse = nurse
+        self.monsters = {i: Monster(name, lvl) for i, (name, lvl) in character_data['monsters'].items()} if 'monsters' in character_data else None
+
+        # comportamiento de movimiento y detección
         self.has_moved = False
         self.can_rotate = True
         self.has_noticed = False
         self.radius = int(radius)
         self.view_directions = character_data['directions']
-        
+
+        # timers para mirar alrededor y para la reacción al notar al jugador
         self.timers = {
             'look around': Timer(1500, autostart = True, repeat = True, func = self.random_view_direction),
             'notice': Timer(500, func = self.start_move)
-        
         }
-        
+        self.notice_sound = notice_sound
+
     def random_view_direction(self):
         if self.can_rotate:
             self.facing_direction = choice(self.view_directions)
 
     def get_dialog(self):
-        return self.character_data['dialog'][f'{'defeated' if self.character_data['defeated'] else 'default'}']
-    
+        return self.character_data['dialog'][f"{'defeated' if self.character_data['defeated'] else 'default'}"]
+
     def raycast(self):
-        if check_connection(self.radius, self, self.player) and self.has_los() and not self.has_moved and not self.has_noticed:
-            self.player.block()
-            self.player.change_facing_direction(self.rect.center)
-            self.timers['notice'].activate()
+        """
+        Cuando el jugador está dentro del radio y hay línea de visión,
+        este método detecta al jugador y activa la reacción.
+
+        Comportamiento:
+        - Bloquea al jugador y lo hace mirar hacia el NPC (indicación visual).
+        - Reproduce el sonido de aviso.
+        - Activa el temporizador 'notice' para que el NPC camine hacia el jugador.
+        - Cuando el NPC alcanza al jugador se inicia el diálogo/combate.
+        """
+        # notar sólo una vez y sólo si no se ha movido ya
+        if check_connections(self.radius, self, self.player) and self.has_los() and not self.has_moved and not self.has_noticed:
+            # bloquear y orientar al jugador para que deje de moverse y mire al NPC
+            try:
+                self.player.block()
+                self.player.change_facing_direction(self.rect.center)
+            except Exception:
+                # defensivo: si no hay jugador, ignorar
+                pass
+
+            # evitar que el NPC rote mientras realiza la acción de aviso
             self.can_rotate = False
+
+            # activar temporizador para que el NPC comience a moverse hacia el jugador
+            try:
+                self.timers['notice'].activate()
+            except Exception:
+                # si el temporizador no existe, iniciar movimiento inmediatamente
+                try:
+                    self.start_move()
+                except Exception:
+                    pass
+
             self.has_noticed = True
             self.player.noticed = True
-            
+
+            # reproducir sonido de aviso si está disponible
+            try:
+                self.notice_sound.play()
+            except Exception:
+                pass
+
     def has_los(self):
-        if vector(self.rect.center).distance_to(self.player.rect.center) <self.radius:
+        if vector(self.rect.center).distance_to(self.player.rect.center) < self.radius:
             collisions = [bool(rect.clipline(self.rect.center, self.player.rect.center)) for rect in self.collision_rects]
             return not any(collisions)
-        
+
     def start_move(self):
         relation = (vector(self.player.rect.center) - vector(self.rect.center)).normalize()
         self.direction = vector(round(relation.x), round(relation.y))
-        
+
     def move(self, dt):
         if not self.has_moved and self.direction:
             if not self.hitbox.inflate(10,10).colliderect(self.player.hitbox):
                 self.rect.center += self.direction * self.speed * dt
                 self.hitbox.center = self.rect.center
             else:
+                # cuando llega cerca del jugador, detenerse y abrir diálogo
                 self.direction = vector()
                 self.has_moved = True
                 self.create_dialog(self)
                 self.player.noticed = False
-            
+
     def update(self, dt):
         for timer in self.timers.values():
             timer.update()
-        
+
         self.animate(dt)
         if self.character_data['look_around']:
             self.raycast()
@@ -122,7 +164,7 @@ class Player(Entity):
         super().__init__(pos, frames, groups, facing_direction)
         self.collision_sprites = collision_sprites
         self.noticed = False
-        
+
     def input(self):
         keys = pygame.key.get_pressed()
         input_vector = vector()
@@ -134,9 +176,8 @@ class Player(Entity):
             input_vector.x -= 1
         if keys[pygame.K_RIGHT]:
             input_vector.x += 1
-        self.direction = input_vector.normalize() if input_vector else vector()
-        
-            
+        self.direction = input_vector.normalize() if input_vector else input_vector
+
     def move(self, dt):
         self.rect.centerx += self.direction.x * self.speed * dt
         self.hitbox.centerx = self.rect.centerx
@@ -145,23 +186,23 @@ class Player(Entity):
         self.rect.centery += self.direction.y * self.speed * dt
         self.hitbox.centery = self.rect.centery
         self.collisions('vertical')
-        
+
     def collisions(self, axis):
         for sprite in self.collision_sprites:
             if sprite.hitbox.colliderect(self.hitbox):
-                if axis == 'vertical':
+                if axis == 'horizontal':
+                    if self.direction.x > 0: 
+                        self.hitbox.right = sprite.hitbox.left
+                    if self.direction.x < 0:
+                        self.hitbox.left = sprite.hitbox.right
+                    self.rect.centerx = self.hitbox.centerx
+                else:
                     if self.direction.y > 0:
                         self.hitbox.bottom = sprite.hitbox.top
                     if self.direction.y < 0:
                         self.hitbox.top = sprite.hitbox.bottom
                     self.rect.centery = self.hitbox.centery
-                else: #horizontal 
-                    if self.direction.x > 0:
-                        self.hitbox.right = sprite.hitbox.left
-                    if self.direction.x < 0:
-                        self.hitbox.left = sprite.hitbox.right
-                    self.rect.centerx = self.hitbox.centerx
-        
+
     def update(self, dt):
         self.y_sort = self.rect.centery
         if not self.blocked:
